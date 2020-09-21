@@ -142,6 +142,7 @@ class HorovodTrainer:
     # 不支持tpu，不支持cpu
     def __init__(
         self,
+        model_name: str,
         model: PreTrainedModel = None,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
@@ -244,6 +245,7 @@ class HorovodTrainer:
         self.compression = hvd.Compression.fp16 if self.args.fp16 else hvd.Compression.none
         self.scaling_logger = get_logger(hvd)
         self.lobj = {}
+        self.model_name = model_name
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
         if not self.args.remove_unused_columns:
@@ -389,6 +391,7 @@ class HorovodTrainer:
             self.optimizer = hvd.DistributedOptimizer(
                 optimizer, named_parameters=self.model.named_parameters(),
                 compression=self.compression,
+                model_name=self.model_name,
                 backward_passes_per_step=self.args.gradient_accumulation_steps)
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 

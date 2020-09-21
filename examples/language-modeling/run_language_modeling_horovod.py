@@ -261,11 +261,12 @@ def main():
     # Initialize our Trainer
     trainer = HorovodTrainer(
         model=model,
+        model_name=model_args.model_type,
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        prediction_loss_only=True,
+        prediction_loss_only=True
     )
 
     # Training
