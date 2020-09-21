@@ -35,6 +35,7 @@ from transformers import (
     DataCollatorForLanguageModeling,
     DataCollatorForPermutationLanguageModeling,
     HfArgumentParser,
+    HorovodTrainer,
     LineByLineTextDataset,
     PreTrainedTokenizer,
     TextDataset,
@@ -258,7 +259,7 @@ def main():
         )
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = HorovodTrainer(
         model=model,
         args=training_args,
         data_collator=data_collator,

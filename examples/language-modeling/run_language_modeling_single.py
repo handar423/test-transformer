@@ -38,7 +38,8 @@ from transformers import (
     LineByLineTextDataset,
     PreTrainedTokenizer,
     TextDataset,
-    Trainer,
+    SingleTrainer,
+    BwdTestTrainer,
     TrainingArguments,
     set_seed,
 )
@@ -258,7 +259,7 @@ def main():
         )
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = BwdTestTrainer(
         model=model,
         args=training_args,
         data_collator=data_collator,

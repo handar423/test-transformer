@@ -612,7 +612,7 @@ def main():
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
+        torch.distributed.init_process_group(backend="nccl", init_method="tcp://172.31.67.81:3456", rank=0, world_size=1)
         args.n_gpu = 1
     args.device = device
 

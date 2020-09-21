@@ -305,7 +305,7 @@ class TrainingArguments:
             # GPUs available in the environment, so `CUDA_VISIBLE_DEVICES=1,2` with `cuda:0`
             # will use the first GPU in that env, i.e. GPU#1
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            n_gpu = torch.cuda.device_count()
+            n_gpu = 1
         else:
             # Here, we'll use torch.distributed.
             # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
