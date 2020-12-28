@@ -391,7 +391,7 @@ class HorovodTrainer:
             self.optimizer = hvd.DistributedOptimizer(
                 optimizer, named_parameters=self.model.named_parameters(),
                 compression=self.compression,
-                model=model, num_steps=self.args.max_steps,
+                model=self.model, num_steps=self.args.max_steps,
                 backward_passes_per_step=self.args.gradient_accumulation_steps)
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
