@@ -155,7 +155,7 @@ class HorovodTrainer:
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         **kwargs,
     ):
-        hvd.init()
+        hvd.init(model_bw_order_file="torch-bert-base")
         if args is None:
             logger.info("No `TrainingArguments` passed, using the current path as `output_dir`.")
             args = TrainingArguments("tmp_trainer")
@@ -391,7 +391,6 @@ class HorovodTrainer:
             self.optimizer = hvd.DistributedOptimizer(
                 optimizer, named_parameters=self.model.named_parameters(),
                 compression=self.compression,
-                model_name=self.model_name,
                 backward_passes_per_step=self.args.gradient_accumulation_steps)
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
