@@ -54,7 +54,7 @@ from .trainer import (
     SequentialDistributedSampler,
 )
 import horovod.torch as hvd
-from logger_hvd import get_logger, log_time, sync_e
+from .logger_hvd import get_logger, log_time, sync_e
 
 _use_native_amp = False
 _use_apex = False
