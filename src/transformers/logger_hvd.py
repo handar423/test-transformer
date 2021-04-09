@@ -26,7 +26,7 @@ def get_logger(hvd):
         os.makedirs(logdir)
     dt = datetime.fromtimestamp(time.time())
     timestamp = dt.strftime("%Y%m%d-%H%M%S")
-    logging_file = os.path.join(logdir, "model-{}-rank{}.log".format(timestamp, hvd.rank()))
+    logging_file = os.path.join(logdir, "model-{}-rank{}.log".format(timestamp, 0))
     logger = MyLogger(logging_file)
     return logger
 

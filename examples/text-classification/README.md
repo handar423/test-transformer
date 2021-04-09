@@ -60,20 +60,19 @@ python utils/download_glue_data.py --data_dir /path/to/glue --tasks all
 after replacing *path/to/glue* with a value that you like. Then you can run
 
 ```bash
-export GLUE_DIR=/path/to/glue
-export TASK_NAME=MRPC
+export GLUE_DIR=~/data/glue/glue_data
+export TASK_NAME=CoLA
+export TRANSFORMERS_VERBOSITY=info
 
 python run_glue.py \
   --model_name_or_path bert-base-cased \
   --task_name $TASK_NAME \
-  --do_train \
   --do_eval \
   --data_dir $GLUE_DIR/$TASK_NAME \
-  --max_seq_length 128 \
-  --per_device_train_batch_size 32 \
-  --learning_rate 2e-5 \
-  --num_train_epochs 3.0 \
-  --output_dir /tmp/$TASK_NAME/
+  --output_dir /tmp/$TASK_NAME/ \
+  --overwrite_output_dir \
+  --per_device_eval_batch_size 32 \
+  --max_seq_length 128
 ```
 
 where task name can be one of CoLA, SST-2, MRPC, STS-B, QQP, MNLI, QNLI, RTE, WNLI.

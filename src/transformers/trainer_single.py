@@ -364,7 +364,6 @@ class SingleTrainer:
                     "weight_decay": 0.0,
                 },
             ]
-            
             self.optimizer = AdamW(
                 optimizer_grouped_parameters,
                 lr=self.args.learning_rate,
@@ -576,8 +575,8 @@ class SingleTrainer:
             model, self.optimizer = amp.initialize(model, self.optimizer, opt_level=self.args.fp16_opt_level)
 
         # multi-gpu training (should be after apex fp16 initialization)
-        # if self.args.n_gpu > 1:
-        #     model = torch.nn.DataParallel(model)
+        if self.args.n_gpu > 1:
+            model = torch.nn.DataParallel(model)
 
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
@@ -988,9 +987,9 @@ class SingleTrainer:
         Subclass and override for custom behavior.
         """
         # forward
-        self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
+        # self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
         outputs = model(**inputs)
-        self.scaling_logger.info(json.dumps(self.lobj))
+        # self.scaling_logger.info(json.dumps(self.lobj))
         # Save past state if it exists
         if self.args.past_index >= 0:
             self._past = outputs[self.args.past_index]
@@ -1218,10 +1217,10 @@ class SingleTrainer:
 
         model = self.model
         # multi-gpu eval
-        # if self.args.n_gpu > 1:
-        #     model = torch.nn.DataParallel(model)
-        # else:
-        model = self.model
+        if self.args.n_gpu > 1:
+            model = torch.nn.DataParallel(model)
+        else:
+            model = self.model
         # Note: in torch.distributed mode, there's no point in wrapping the model
         # inside a DistributedDataParallel as we'll be under `no_grad` anyways.
 
@@ -1327,7 +1326,9 @@ class SingleTrainer:
         inputs = self._prepare_inputs(inputs)
 
         with torch.no_grad():
+            self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
             outputs = model(**inputs)
+            self.scaling_logger.info(json.dumps(self.lobj))
             if has_labels:
                 # The .mean() is to reduce in case of distributed training
                 loss = outputs[0].mean().item()

@@ -30,6 +30,7 @@ from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers import (
     HfArgumentParser,
     Trainer,
+    SingleTrainer,
     TrainingArguments,
     glue_compute_metrics,
     glue_output_modes,
@@ -159,7 +160,7 @@ def main():
         return compute_metrics_fn
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = SingleTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
