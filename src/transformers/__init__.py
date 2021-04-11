@@ -266,6 +266,7 @@ if is_torch_available():
         BartModel,
         PretrainedBartModel,
     )
+    # jys:add bert
     from .modeling_bert import (
         BERT_PRETRAINED_MODEL_ARCHIVE_LIST,
         BertForMaskedLM,
@@ -280,6 +281,14 @@ if is_torch_available():
         BertModel,
         BertPreTrainedModel,
         load_tf_weights_in_bert,
+        BertForSequenceClassification_no_head_mask,
+        BertForSequenceClassification_no_embedding,
+        BertForSequenceClassification_no_hidden_1,
+        BertForSequenceClassification_no_encoder,
+        BertGetHeadMask,
+        BertGetEmbedding,
+        BertGetSingleHidden,
+        BertGetEncoder,
     )
     from .modeling_bert_generation import (
         BertGenerationDecoder,
@@ -490,6 +499,7 @@ if is_torch_available():
     # Trainer
     from .trainer import EvalPrediction, Trainer, set_seed, torch_distributed_zero_first
     from .trainer_single import SingleTrainer
+    from .trainer_single_split import SplitSingleTrainer
     from .trainer_bwd import BwdTestTrainer
 
 # TensorFlow

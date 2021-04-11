@@ -19,20 +19,20 @@ class MyLogger:
     def __del__(self):
         self.log_file.close()
 
-def get_logger(hvd):
+def get_logger(hvd, name):
     logdir = "~/horovod_logs/model_log"
     logdir = os.path.expanduser(logdir)
     if not os.path.exists(logdir):
         os.makedirs(logdir)
     dt = datetime.fromtimestamp(time.time())
     timestamp = dt.strftime("%Y%m%d-%H%M%S")
-    logging_file = os.path.join(logdir, "model-{}-rank{}.log".format(timestamp, 0))
+    logging_file = os.path.join(logdir, "model-{}-{}-rank{}.log".format(name, timestamp, 0))
     logger = MyLogger(logging_file)
     return logger
 
 @contextlib.contextmanager
 def log_time(_logger : MyLogger, phase_name, hvd):
-    lobj = {"ph": "X", "name": phase_name, "ts": time.time(), "pid": hvd.rank(), "dur": 0}
+    lobj = {"ph": "X", "name": phase_name, "ts": time.time(), "pid": 0, "dur": 0}
     yield
     lobj["dur"] = time.time()-lobj["ts"]
     _logger.info(json.dumps(lobj))

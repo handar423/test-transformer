@@ -30,12 +30,21 @@ from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers import (
     HfArgumentParser,
     Trainer,
-    SingleTrainer,
+    SplitSingleTrainer,
     TrainingArguments,
     glue_compute_metrics,
     glue_output_modes,
     glue_tasks_num_labels,
     set_seed,
+    BertForSequenceClassification,
+    BertForSequenceClassification_no_head_mask,
+    BertForSequenceClassification_no_embedding,
+    BertForSequenceClassification_no_hidden_1,
+    BertForSequenceClassification_no_encoder,
+    BertGetHeadMask,
+    BertGetEmbedding,
+    BertGetSingleHidden,
+    BertGetEncoder,
 )
 
 
@@ -128,19 +137,39 @@ def main():
         cache_dir=model_args.cache_dir,
     )
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-    )
+    model_pre = None
+    model_suf = None
+    model = None
+
+    if training_args.model_split=="head_mask" :
+        model_pre = BertGetHeadMask(config=config)
+        model_suf = BertForSequenceClassification_no_head_mask(config=config)
+    elif training_args.model_split=="embedding" :
+        model_pre = BertGetEmbedding(config=config)
+        model_suf = BertForSequenceClassification_no_embedding(config=config)
+    elif training_args.model_split=="single_hidden" :
+        model_pre = BertGetSingleHidden(config=config)
+        model_suf = BertForSequenceClassification_no_hidden_1(config=config)
+    elif training_args.model_split=="encoder" :
+        model_pre = BertGetEncoder(config=config)
+        model_suf = BertForSequenceClassification_no_encoder(config=config)
+    else:
+        model = BertForSequenceClassification(config=config)
+
+    print("split strategy:", training_args.model_split)
+    print("model_pre", model_pre.__class__)
+    print("model_suf", model_suf.__class__)
+    print("model", model.__class__)
 
     # Get datasets
     train_dataset = (
         GlueDataset(data_args, tokenizer=tokenizer, cache_dir=model_args.cache_dir) if training_args.do_train else None
     )
     eval_dataset = (
-        GlueDataset(data_args, tokenizer=tokenizer, mode="dev", cache_dir=model_args.cache_dir)
+        GlueDataset(data_args, tokenizer=tokenizer, 
+                    mode="dev",
+                    cache_dir=model_args.cache_dir,
+                    batch_size=training_args.per_device_eval_batch_size)
         if training_args.do_eval
         else None
     )
@@ -161,12 +190,14 @@ def main():
         return compute_metrics_fn
 
     # Initialize our Trainer
-    trainer = SingleTrainer(
+    trainer = SplitSingleTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         compute_metrics=build_compute_metrics_fn(data_args.task_name),
+        model_pre=model_pre,
+        model_suf=model_suf,
     )
 
     # Training
@@ -190,7 +221,10 @@ def main():
         if data_args.task_name == "mnli":
             mnli_mm_data_args = dataclasses.replace(data_args, task_name="mnli-mm")
             eval_datasets.append(
-                GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, mode="dev", cache_dir=model_args.cache_dir)
+                GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, 
+                            mode="dev",
+                            cache_dir=model_args.cache_dir,
+                            batch_size=training_args.per_device_eval_batch_size)
             )
 
         for eval_dataset in eval_datasets:

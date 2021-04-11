@@ -73,10 +73,12 @@ class GlueDataset(Dataset):
         limit_length: Optional[int] = None,
         mode: Union[str, Split] = Split.train,
         cache_dir: Optional[str] = None,
+        batch_size: Optional[int] = None,
     ):
         self.args = args
         self.processor = glue_processors[args.task_name]()
         self.output_mode = glue_output_modes[args.task_name]
+        self.batch_size = batch_size
         if isinstance(mode, str):
             try:
                 mode = Split[mode]
@@ -119,7 +121,7 @@ class GlueDataset(Dataset):
                 logger.info(f"Creating features from dataset file at {args.data_dir}")
 
                 if mode == Split.dev:
-                    examples = self.processor.get_dev_examples(args.data_dir)
+                    examples = self.processor.get_dev_examples(args.data_dir, self.batch_size)
                 elif mode == Split.test:
                     examples = self.processor.get_test_examples(args.data_dir)
                 else:

@@ -246,6 +246,15 @@ class TrainingArguments:
         metadata={"help": "If >=0, uses the corresponding part of the output as the past state for next step."},
     )
 
+    model_split: Optional[str] = field(
+        default="no_split",
+        metadata={
+            "help": (
+                "how to split model"
+            )
+        },
+    )
+
     run_name: Optional[str] = field(
         default=None, metadata={"help": "An optional descriptor for the run. Notably used for wandb logging."}
     )
