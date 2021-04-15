@@ -456,7 +456,7 @@ class SplitSingleTrainer:
         For a number of configurable items in the environment,
         see `here <https://www.comet.ml/docs/python-sdk/advanced/#comet-configuration-variables>`__
         """
-        if self.is_world_master():
+        if self.is_world_process_zero():
             comet_mode = os.getenv("COMET_MODE", "ONLINE").upper()
             args = {"project_name": os.getenv("COMET_PROJECT_NAME", "huggingface")}
             experiment = None
@@ -537,7 +537,7 @@ class SplitSingleTrainer:
             self.args.output_dir = checkpoint_dir
             output_dir = os.path.join(self.args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{self.global_step}")
             self.save_model(output_dir)
-            if self.is_world_master():
+            if self.is_world_process_zero():
                 torch.save(self.optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                 torch.save(self.lr_scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
 
@@ -1617,7 +1617,7 @@ class SplitSingleTrainer:
             self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
             inputs = self._prepare_inputs_cpu(inputs)
             encoder_outputs = model_pre(**inputs)
-            inputs["encoder_outputs"] = encoder_outputs
+            inputs["encoder_outputs"] = tuple(i.to(self.args.device) for i in encoder_outputs)
             inputs = self._prepare_inputs(inputs)
             outputs = model_suf(**inputs)
             self.scaling_logger.info(json.dumps(self.lobj))
@@ -2025,7 +2025,7 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
         with torch.no_grad():
             inputs = self._prepare_inputs_cpu(inputs)
             encoder_outputs = model_pre(**inputs)
-            inputs["encoder_outputs"] = encoder_outputs
+            inputs["encoder_outputs"] = tuple(i.to(self.args.device) for i in encoder_outputs)
             self.queue_to_gpu_loop.put(inputs)
 
 
@@ -2281,5 +2281,5 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
                     break
                 inputs = self._prepare_inputs_cpu(inputs)
                 encoder_outputs = model_pre(**inputs)
-                inputs["encoder_outputs"] = encoder_outputs
+                inputs["encoder_outputs"] = tuple(i.to(self.args.device) for i in encoder_outputs)
                 self.queue_to_gpu_loop.put(inputs)
