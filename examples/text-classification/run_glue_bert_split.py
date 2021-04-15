@@ -31,6 +31,8 @@ from transformers import (
     HfArgumentParser,
     Trainer,
     SplitSingleTrainer,
+    SplitSingleTrainerPipe2Level,
+    SplitSingleTrainerPipe3Level,
     TrainingArguments,
     glue_compute_metrics,
     glue_output_modes,
@@ -68,6 +70,9 @@ class ModelArguments:
     )
     cache_dir: Optional[str] = field(
         default=None, metadata={"help": "Where do you want to store the pretrained models downloaded from s3"}
+    )
+    pipe_level: Optional[int] = field(
+        default=0, metadata={"help": "0: no pipeline; 1: cpu model && gpu model pipeline; 2: + dataloader pipeline"}
     )
 
 
@@ -189,16 +194,40 @@ def main():
 
         return compute_metrics_fn
 
-    # Initialize our Trainer
-    trainer = SplitSingleTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        compute_metrics=build_compute_metrics_fn(data_args.task_name),
-        model_pre=model_pre,
-        model_suf=model_suf,
-    )
+    if model_args.pipe_level==0 :
+        trainer = SplitSingleTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            compute_metrics=build_compute_metrics_fn(data_args.task_name),
+            model_pre=model_pre,
+            model_suf=model_suf,
+        )
+    elif model_args.pipe_level==1 :
+        trainer = SplitSingleTrainerPipe2Level(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            compute_metrics=build_compute_metrics_fn(data_args.task_name),
+            model_pre=model_pre,
+            model_suf=model_suf,
+        )
+    elif model_args.pipe_level==2 :
+        trainer = SplitSingleTrainerPipe3Level(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            compute_metrics=build_compute_metrics_fn(data_args.task_name),
+            model_pre=model_pre,
+            model_suf=model_suf,
+        )
+    else:
+        raise ValueError(
+            f"not support pipe level ({training_args.output_dir})."
+        )
 
     # Training
     if training_args.do_train:

@@ -6,6 +6,8 @@ import os
 import re
 import shutil
 import warnings
+import threading
+from queue import Queue
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -243,6 +245,12 @@ class SplitSingleTrainer:
         self.hp_search_backend = None
         self.use_tune_checkpoints = False
         self.scaling_logger = get_logger(0, args.model_split + str(self.args.per_device_eval_batch_size))
+        self.prediction_func_map={
+            0:prediction_step_head_mask,
+            1:prediction_step_embedding,
+            2:prediction_step_hidden_1,
+            3:prediction_step_encoder,
+        }
         self.lobj = {}
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
@@ -327,6 +335,7 @@ class SplitSingleTrainer:
 
         return DataLoader(
             eval_dataset,
+            num_workers=self.args.eval_num_worker,
             sampler=eval_sampler,
             batch_size=self.args.eval_batch_size,
             collate_fn=self.data_collator,
@@ -1303,9 +1312,9 @@ class SplitSingleTrainer:
                     preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
                 if labels is not None:
                     label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
-        elif self.split_strategy == 0:
+        else:
             for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
-                loss, logits, labels = self.prediction_step_head_mask(model_pre, model_suf, inputs, prediction_loss_only)
+                loss, logits, labels = self.prediction_map[self.split_strategy](model_pre, model_suf, inputs, prediction_loss_only)
                 batch_size = inputs[list(inputs.keys())[0]].shape[0]
                 if loss is not None:
                     eval_losses.extend([loss] * batch_size)
@@ -1313,37 +1322,6 @@ class SplitSingleTrainer:
                     preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
                 if labels is not None:
                     label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
-        elif self.split_strategy == 1:
-            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
-                loss, logits, labels = self.prediction_step_embedding(model_pre, model_suf, inputs, prediction_loss_only)
-                batch_size = inputs[list(inputs.keys())[0]].shape[0]
-                if loss is not None:
-                    eval_losses.extend([loss] * batch_size)
-                if logits is not None:
-                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
-                if labels is not None:
-                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
-        elif self.split_strategy == 2:
-            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
-                loss, logits, labels = self.prediction_step_hidden_1(model_pre, model_suf, inputs, prediction_loss_only)
-                batch_size = inputs[list(inputs.keys())[0]].shape[0]
-                if loss is not None:
-                    eval_losses.extend([loss] * batch_size)
-                if logits is not None:
-                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
-                if labels is not None:
-                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
-        elif self.split_strategy == 3:
-            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
-                loss, logits, labels = self.prediction_step_encoder(model_pre, model_suf, inputs, prediction_loss_only)
-                batch_size = inputs[list(inputs.keys())[0]].shape[0]
-                if loss is not None:
-                    eval_losses.extend([loss] * batch_size)
-                if logits is not None:
-                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
-                if labels is not None:
-                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
-
 
         if self.args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
@@ -1690,3 +1668,670 @@ class SplitSingleTrainer:
 
         else:
             return 0
+
+
+class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
+    def __init__(
+        self,
+        model: PreTrainedModel = None,
+        args: TrainingArguments = None,
+        data_collator: Optional[DataCollator] = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
+        tokenizer: Optional["PreTrainedTokenizerBase"] = None,
+        model_init: Callable[[], PreTrainedModel] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        tb_writer: Optional["SummaryWriter"] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        model_pre: Optional[PreTrainedModel] = None,
+        model_suf: Optional[PreTrainedModel] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            model,
+            args,
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            tokenizer,
+            model_init,
+            compute_metrics,
+            tb_writer,
+            optimizers,
+            model_pre,
+            model_suf
+        )
+        self.queue_to_gpu_loop = Queue(maxsize=5)
+        self.queue_to_prediction_loop = Queue(maxsize=3)
+        self.thread_gpu = threading.Thread(
+            target=SplitSingleTrainerPipe2Level.pipe_gpu_model,
+            args=(self, self.args.prediction_loss_only))
+        self.prediction_func_map={
+            0:prediction_step_head_mask,
+            1:prediction_step_embedding,
+            2:prediction_step_hidden_1,
+            3:prediction_step_encoder,
+        }
+
+
+    def pipe_gpu_model(
+            self,
+            prediction_loss_only: bool
+        ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+            """
+            Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+            Subclass and override to inject custom behavior.
+
+            Args:
+                prediction_loss_only (:obj:`bool`):
+                    Whether or not to return the loss only.
+
+            Return:
+                Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+                A tuple with the loss, logits and labels (each being optional).
+            """
+
+            eval_losses: List[float] = []
+            preds: torch.Tensor = None
+            label_ids: torch.Tensor = None
+
+            while True:
+                inputs = self.queue_to_gpu_loop.get()
+                if inputs == None :
+                    break
+
+                with torch.no_grad():
+                    inputs = self._prepare_inputs(inputs)
+                    outputs = self.model_suf(**inputs)
+                    self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
+                    self.scaling_logger.info(json.dumps(self.lobj))
+                    if has_labels:
+                        # The .mean() is to reduce in case of distributed training
+                        loss = outputs[0].mean().item()
+                        logits = outputs[1:]
+                    else:
+                        loss = None
+                        # Slicing so we get a tuple even if `outputs` is a `ModelOutput`.
+                        logits = outputs[:]
+                    if self.args.past_index >= 0:
+                        self._past = outputs[self.args.past_index if has_labels else self.args.past_index - 1]
+
+                if prediction_loss_only:
+                    logits, labels = None, None
+                else:
+                    labels = inputs.get("labels")
+                    if labels is not None:
+                        labels = labels.detach()
+                    logits = tuple(l.detach() for l in logits)
+
+                batch_size = inputs[list(inputs.keys())[0]].shape[0]
+                if loss is not None:
+                    eval_losses.extend([loss] * batch_size)
+                if logits is not None:
+                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
+                if labels is not None:
+                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
+
+            self.queue_to_prediction_loop.put(eval_losses)
+            self.queue_to_prediction_loop.put(preds)
+            self.queue_to_prediction_loop.put(label_ids)
+
+
+    def prediction_loop(
+        self, dataloader: DataLoader, description: str, prediction_loss_only: Optional[bool] = None
+    ) -> PredictionOutput:
+        """
+        Prediction/evaluation loop, shared by :obj:`Trainer.evaluate()` and :obj:`Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+        if hasattr(self, "_prediction_loop"):
+            warnings.warn(
+                "The `_prediction_loop` method is deprecated and won't be called in a future version, define `prediction_loop` in your subclass.",
+                FutureWarning,
+            )
+            return self._prediction_loop(dataloader, description, prediction_loss_only=prediction_loss_only)
+
+        if self.split_strategy == -1:
+            assert not getattr(
+                self.model.config, "output_attentions", False
+            ), "The prediction loop does not work with `output_attentions=True`."
+            assert not getattr(
+                self.model.config, "output_hidden_states", False
+            ), "The prediction loop does not work with `output_hidden_states=True`."
+
+            model = self.model
+        else:
+            assert not getattr(
+                self.model_pre.config, "output_attentions", False
+            ), "The prediction loop does not work with `output_attentions=True`."
+            assert not getattr(
+                self.model_pre.config, "output_hidden_states", False
+            ), "The prediction loop does not work with `output_hidden_states=True`."
+
+            assert not getattr(
+                self.model_suf.config, "output_attentions", False
+            ), "The prediction loop does not work with `output_attentions=True`."
+            assert not getattr(
+                self.model_suf.config, "output_hidden_states", False
+            ), "The prediction loop does not work with `output_hidden_states=True`."
+
+
+        # multi-gpu eval
+        # if self.args.n_gpu > 1:
+        #     model = torch.nn.DataParallel(model)
+        # else:
+        #     model = self.model
+        # Note: in torch.distributed mode, there's no point in wrapping the model
+        # inside a DistributedDataParallel as we'll be under `no_grad` anyways.
+
+        batch_size = dataloader.batch_size
+        logger.info("***** Running %s *****", description)
+        logger.info("  Num examples = %d", self.num_examples(dataloader))
+        logger.info("  Batch size = %d", batch_size)
+        eval_losses: List[float] = []
+        preds: torch.Tensor = None
+        label_ids: torch.Tensor = None
+
+        if self.split_strategy == -1:
+            self.model.eval()
+        else:
+            self.model_pre.eval()
+            self.model_suf.eval()
+        
+        if is_torch_tpu_available():
+            dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
+
+        if self.args.past_index >= 0:
+            self._past = None
+
+        disable_tqdm = not self.is_local_process_zero() or self.args.disable_tqdm
+        if self.split_strategy == -1:
+            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
+                loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only)
+                batch_size = inputs[list(inputs.keys())[0]].shape[0]
+                if loss is not None:
+                    eval_losses.extend([loss] * batch_size)
+                if logits is not None:
+                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
+                if labels is not None:
+                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
+        else:
+            self.thread_gpu.start()
+
+            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
+                self.prediction_map[self.split_strategy](model_pre, inputs)
+            self.queue_to_gpu_loop.put(None)
+
+            self.thread_gpu.join()
+            eval_losses: List[float] = self.queue_to_prediction_loop.get()
+            preds: torch.Tensor = self.queue_to_prediction_loop.get()
+            label_ids: torch.Tensor = self.queue_to_prediction_loop.get()
+
+        if self.args.past_index and hasattr(self, "_past"):
+            # Clean the state at the end of the evaluation loop
+            delattr(self, "_past")
+
+        if self.args.local_rank != -1:
+            # In distributed mode, concatenate all results from all nodes:
+            if preds is not None:
+                preds = tuple(distributed_concat(p, num_total_examples=self.num_examples(dataloader)) for p in preds)
+            if label_ids is not None:
+                label_ids = distributed_concat(label_ids, num_total_examples=self.num_examples(dataloader))
+        elif is_torch_tpu_available():
+            # tpu-comment: Get all predictions and labels from all worker shards of eval dataset
+            if preds is not None:
+                preds = tuple(xm.mesh_reduce(f"eval_preds_{i}", p, torch.cat) for i, p in enumerate(preds))
+            if label_ids is not None:
+                label_ids = xm.mesh_reduce("eval_label_ids", label_ids, torch.cat)
+            if eval_losses is not None:
+                eval_losses = xm.mesh_reduce("eval_losses", torch.tensor(eval_losses), torch.cat).tolist()
+
+        # Finally, turn the aggregated tensors into numpy arrays.
+        if preds is not None:
+            preds = tuple(p.cpu().numpy() for p in preds)
+            if len(preds) == 1:
+                preds = preds[0]
+        if label_ids is not None:
+            label_ids = label_ids.cpu().numpy()
+
+        if self.compute_metrics is not None and preds is not None and label_ids is not None:
+            metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=label_ids))
+        else:
+            metrics = {}
+        if len(eval_losses) > 0:
+            if self.args.local_rank != -1:
+                metrics["eval_loss"] = (
+                    distributed_broadcast_scalars(eval_losses, num_total_examples=self.num_examples(dataloader))
+                    .mean()
+                    .item()
+                )
+            else:
+                metrics["eval_loss"] = np.mean(eval_losses)
+
+        # Prefix all keys with eval_
+        for key in list(metrics.keys()):
+            if not key.startswith("eval_"):
+                metrics[f"eval_{key}"] = metrics.pop(key)
+
+        return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
+
+
+    def prediction_step_head_mask(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        """
+        Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (:obj:`nn.Module`):
+                The model to evaluate.
+            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+        """
+
+        with torch.no_grad():
+            inputs = self._prepare_inputs_cpu(inputs)
+            output_pre = model_pre(**inputs)
+            inputs["head_mask_result"] = output_pre
+            self.queue_to_gpu_loop.put(inputs)
+
+
+    def prediction_step_embedding(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        """
+        Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (:obj:`nn.Module`):
+                The model to evaluate.
+            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+        """
+        with torch.no_grad():
+            inputs = self._prepare_inputs_cpu(inputs)
+            head_mask_result, embedding_output = model_pre(**inputs)
+            inputs["head_mask_result"] = head_mask_result
+            inputs["embedding_output"] = embedding_output
+            self.queue_to_gpu_loop.put(inputs)
+
+
+    def prediction_step_hidden_1(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        """
+        Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (:obj:`nn.Module`):
+                The model to evaluate.
+            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+        """
+        with torch.no_grad():
+            inputs = self._prepare_inputs_cpu(inputs)
+            head_mask_result, all_hidden_states, all_attentions, hidden_states = model_pre(**inputs)
+            inputs["head_mask_result"] = head_mask_result
+            inputs["middle_all_hidden_states"] = all_hidden_states
+            inputs["middle_all_attentions"] = all_attentions
+            inputs["hidden_states"] = hidden_states
+            self.queue_to_gpu_loop.put(inputs)
+
+
+    def prediction_step_encoder(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        """
+        Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (:obj:`nn.Module`):
+                The model to evaluate.
+            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+        """
+        with torch.no_grad():
+            inputs = self._prepare_inputs_cpu(inputs)
+            encoder_outputs = model_pre(**inputs)
+            inputs["encoder_outputs"] = encoder_outputs
+            self.queue_to_gpu_loop.put(inputs)
+
+
+class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
+    def __init__(
+        self,
+        model: PreTrainedModel = None,
+        args: TrainingArguments = None,
+        data_collator: Optional[DataCollator] = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
+        tokenizer: Optional["PreTrainedTokenizerBase"] = None,
+        model_init: Callable[[], PreTrainedModel] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        tb_writer: Optional["SummaryWriter"] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        model_pre: Optional[PreTrainedModel] = None,
+        model_suf: Optional[PreTrainedModel] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            model,
+            args,
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            tokenizer,
+            model_init,
+            compute_metrics,
+            tb_writer,
+            optimizers,
+            model_pre,
+            model_suf
+        )
+        self.queue_to_cpu_loop = Queue(maxsize=5)
+        self.queue_to_gpu_loop = Queue(maxsize=5)
+        self.queue_to_prediction_loop = Queue(maxsize=3)
+        self.thread_gpu = threading.Thread(
+            target=SplitSingleTrainerPipe2Level.pipe_gpu_model,
+            args=(self, self.args.prediction_loss_only))
+        self.prediction_func_map={
+            0:prediction_step_head_mask,
+            1:prediction_step_embedding,
+            2:prediction_step_hidden_1,
+            3:prediction_step_encoder,
+        }
+
+
+    def pipe_gpu_model(
+            self,
+            prediction_loss_only: bool
+        ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+            """
+            Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+            Subclass and override to inject custom behavior.
+
+            Args:
+                prediction_loss_only (:obj:`bool`):
+                    Whether or not to return the loss only.
+
+            Return:
+                Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+                A tuple with the loss, logits and labels (each being optional).
+            """
+
+            eval_losses: List[float] = []
+            preds: torch.Tensor = None
+            label_ids: torch.Tensor = None
+
+            while True:
+                inputs = self.queue_to_gpu_loop.get()
+                if inputs == None :
+                    break
+
+                with torch.no_grad():
+                    inputs = self._prepare_inputs(inputs)
+                    outputs = self.model_suf(**inputs)
+                    self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
+                    self.scaling_logger.info(json.dumps(self.lobj))
+                    if has_labels:
+                        # The .mean() is to reduce in case of distributed training
+                        loss = outputs[0].mean().item()
+                        logits = outputs[1:]
+                    else:
+                        loss = None
+                        # Slicing so we get a tuple even if `outputs` is a `ModelOutput`.
+                        logits = outputs[:]
+                    if self.args.past_index >= 0:
+                        self._past = outputs[self.args.past_index if has_labels else self.args.past_index - 1]
+
+                if prediction_loss_only:
+                    logits, labels = None, None
+                else:
+                    labels = inputs.get("labels")
+                    if labels is not None:
+                        labels = labels.detach()
+                    logits = tuple(l.detach() for l in logits)
+
+                batch_size = inputs[list(inputs.keys())[0]].shape[0]
+                if loss is not None:
+                    eval_losses.extend([loss] * batch_size)
+                if logits is not None:
+                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
+                if labels is not None:
+                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
+
+            self.queue_to_prediction_loop.put(eval_losses)
+            self.queue_to_prediction_loop.put(preds)
+            self.queue_to_prediction_loop.put(label_ids)
+
+
+    def prediction_loop(
+        self, dataloader: DataLoader, description: str, prediction_loss_only: Optional[bool] = None
+    ) -> PredictionOutput:
+        """
+        Prediction/evaluation loop, shared by :obj:`Trainer.evaluate()` and :obj:`Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+        if hasattr(self, "_prediction_loop"):
+            warnings.warn(
+                "The `_prediction_loop` method is deprecated and won't be called in a future version, define `prediction_loop` in your subclass.",
+                FutureWarning,
+            )
+            return self._prediction_loop(dataloader, description, prediction_loss_only=prediction_loss_only)
+
+        if self.split_strategy == -1:
+            assert not getattr(
+                self.model.config, "output_attentions", False
+            ), "The prediction loop does not work with `output_attentions=True`."
+            assert not getattr(
+                self.model.config, "output_hidden_states", False
+            ), "The prediction loop does not work with `output_hidden_states=True`."
+
+            model = self.model
+        else:
+            assert not getattr(
+                self.model_pre.config, "output_attentions", False
+            ), "The prediction loop does not work with `output_attentions=True`."
+            assert not getattr(
+                self.model_pre.config, "output_hidden_states", False
+            ), "The prediction loop does not work with `output_hidden_states=True`."
+
+            assert not getattr(
+                self.model_suf.config, "output_attentions", False
+            ), "The prediction loop does not work with `output_attentions=True`."
+            assert not getattr(
+                self.model_suf.config, "output_hidden_states", False
+            ), "The prediction loop does not work with `output_hidden_states=True`."
+
+
+        # multi-gpu eval
+        # if self.args.n_gpu > 1:
+        #     model = torch.nn.DataParallel(model)
+        # else:
+        #     model = self.model
+        # Note: in torch.distributed mode, there's no point in wrapping the model
+        # inside a DistributedDataParallel as we'll be under `no_grad` anyways.
+
+        batch_size = dataloader.batch_size
+        logger.info("***** Running %s *****", description)
+        logger.info("  Num examples = %d", self.num_examples(dataloader))
+        logger.info("  Batch size = %d", batch_size)
+        eval_losses: List[float] = []
+        preds: torch.Tensor = None
+        label_ids: torch.Tensor = None
+
+        if self.split_strategy == -1:
+            self.model.eval()
+        else:
+            self.model_pre.eval()
+            self.model_suf.eval()
+        
+        if is_torch_tpu_available():
+            dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
+
+        if self.args.past_index >= 0:
+            self._past = None
+
+        disable_tqdm = not self.is_local_process_zero() or self.args.disable_tqdm
+        if self.split_strategy == -1:
+            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
+                loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only)
+                batch_size = inputs[list(inputs.keys())[0]].shape[0]
+                if loss is not None:
+                    eval_losses.extend([loss] * batch_size)
+                if logits is not None:
+                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
+                if labels is not None:
+                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
+        else:
+            thread_cpu = threading.Thread(
+                target=self.prediction_map[self.split_strategy],
+                args=(self, model_pre))
+            thread_cpu.start()
+            self.thread_gpu.start()
+
+            for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
+                self.queue_to_cpu_loop.put(inputs)
+            self.queue_to_cpu_loop.put(None)
+
+            thread_cpu.join()
+            self.thread_gpu.join()
+            eval_losses: List[float] = self.queue_to_prediction_loop.get()
+            preds: torch.Tensor = self.queue_to_prediction_loop.get()
+            label_ids: torch.Tensor = self.queue_to_prediction_loop.get()
+
+        if self.args.past_index and hasattr(self, "_past"):
+            # Clean the state at the end of the evaluation loop
+            delattr(self, "_past")
+
+        if self.args.local_rank != -1:
+            # In distributed mode, concatenate all results from all nodes:
+            if preds is not None:
+                preds = tuple(distributed_concat(p, num_total_examples=self.num_examples(dataloader)) for p in preds)
+            if label_ids is not None:
+                label_ids = distributed_concat(label_ids, num_total_examples=self.num_examples(dataloader))
+        elif is_torch_tpu_available():
+            # tpu-comment: Get all predictions and labels from all worker shards of eval dataset
+            if preds is not None:
+                preds = tuple(xm.mesh_reduce(f"eval_preds_{i}", p, torch.cat) for i, p in enumerate(preds))
+            if label_ids is not None:
+                label_ids = xm.mesh_reduce("eval_label_ids", label_ids, torch.cat)
+            if eval_losses is not None:
+                eval_losses = xm.mesh_reduce("eval_losses", torch.tensor(eval_losses), torch.cat).tolist()
+
+        # Finally, turn the aggregated tensors into numpy arrays.
+        if preds is not None:
+            preds = tuple(p.cpu().numpy() for p in preds)
+            if len(preds) == 1:
+                preds = preds[0]
+        if label_ids is not None:
+            label_ids = label_ids.cpu().numpy()
+
+        if self.compute_metrics is not None and preds is not None and label_ids is not None:
+            metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=label_ids))
+        else:
+            metrics = {}
+        if len(eval_losses) > 0:
+            if self.args.local_rank != -1:
+                metrics["eval_loss"] = (
+                    distributed_broadcast_scalars(eval_losses, num_total_examples=self.num_examples(dataloader))
+                    .mean()
+                    .item()
+                )
+            else:
+                metrics["eval_loss"] = np.mean(eval_losses)
+
+        # Prefix all keys with eval_
+        for key in list(metrics.keys()):
+            if not key.startswith("eval_"):
+                metrics[f"eval_{key}"] = metrics.pop(key)
+
+        return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
+
+
+    def prediction_step_head_mask(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        with torch.no_grad():
+            while True:
+                inputs = self.queue_to_cpu_loop.get()
+                if inputs == None:
+                    self.queue_to_gpu_loop.put(None)
+                    break
+                inputs = self._prepare_inputs_cpu(inputs)
+                output_pre = model_pre(**inputs)
+                inputs["head_mask_result"] = output_pre
+                self.queue_to_gpu_loop.put(inputs)
+
+
+    def prediction_step_embedding(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        with torch.no_grad():
+            while True:
+                inputs = self.queue_to_cpu_loop.get()
+                if inputs == None:
+                    self.queue_to_gpu_loop.put(None)
+                    break
+                inputs = self._prepare_inputs_cpu(inputs)
+                head_mask_result, embedding_output = model_pre(**inputs)
+                inputs["head_mask_result"] = head_mask_result
+                inputs["embedding_output"] = embedding_output
+                self.queue_to_gpu_loop.put(inputs)
+
+
+    def prediction_step_hidden_1(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        with torch.no_grad():
+            while True:
+                inputs = self.queue_to_cpu_loop.get()
+                if inputs == None:
+                    self.queue_to_gpu_loop.put(None)
+                    break
+                inputs = self._prepare_inputs_cpu(inputs)
+                head_mask_result, all_hidden_states, all_attentions, hidden_states = model_pre(**inputs)
+                inputs["head_mask_result"] = head_mask_result
+                inputs["middle_all_hidden_states"] = all_hidden_states
+                inputs["middle_all_attentions"] = all_attentions
+                inputs["hidden_states"] = hidden_states
+                self.queue_to_gpu_loop.put(inputs)
+
+
+    def prediction_step_encoder(
+        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
+    ):
+        with torch.no_grad():
+            while True:
+                inputs = self.queue_to_cpu_loop.get()
+                if inputs == None:
+                    self.queue_to_gpu_loop.put(None)
+                    break
+                inputs = self._prepare_inputs_cpu(inputs)
+                encoder_outputs = model_pre(**inputs)
+                inputs["encoder_outputs"] = encoder_outputs
+                self.queue_to_gpu_loop.put(inputs)

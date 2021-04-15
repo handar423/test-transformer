@@ -499,7 +499,11 @@ if is_torch_available():
     # Trainer
     from .trainer import EvalPrediction, Trainer, set_seed, torch_distributed_zero_first
     from .trainer_single import SingleTrainer
-    from .trainer_single_split import SplitSingleTrainer
+    from .trainer_single_split import(
+        SplitSingleTrainer,
+        SplitSingleTrainerPipe2Level,
+        SplitSingleTrainerPipe3Level,
+    )
     from .trainer_bwd import BwdTestTrainer
 
 # TensorFlow

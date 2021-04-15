@@ -255,6 +255,15 @@ class TrainingArguments:
         },
     )
 
+    eval_num_worker: Optional[int] = field(
+        default=0,
+        metadata={
+            "help": (
+                "how many workers in eval dataloader"
+            )
+        },
+    )
+
     run_name: Optional[str] = field(
         default=None, metadata={"help": "An optional descriptor for the run. Notably used for wandb logging."}
     )
