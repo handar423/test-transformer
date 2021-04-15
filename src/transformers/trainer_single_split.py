@@ -7,6 +7,7 @@ import re
 import shutil
 import warnings
 import threading
+import time
 from queue import Queue
 from contextlib import contextmanager
 from pathlib import Path
@@ -1745,8 +1746,6 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
                 with torch.no_grad():
                     inputs = self._prepare_inputs(inputs)
                     outputs = self.model_suf(**inputs)
-                    self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
-                    self.scaling_logger.info(json.dumps(self.lobj))
                     if has_labels:
                         # The .mean() is to reduce in case of distributed training
                         loss = outputs[0].mean().item()
@@ -1847,6 +1846,9 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
         if self.args.past_index >= 0:
             self._past = None
 
+        # 计时开始
+        infer_start = time.time()
+
         disable_tqdm = not self.is_local_process_zero() or self.args.disable_tqdm
         if self.split_strategy == -1:
             for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
@@ -1869,6 +1871,13 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
             eval_losses: List[float] = self.queue_to_prediction_loop.get()
             preds: torch.Tensor = self.queue_to_prediction_loop.get()
             label_ids: torch.Tensor = self.queue_to_prediction_loop.get()
+
+        # 计时结束
+        torch.cuda.synchronize()
+        infer_end = time.time()
+        infer_example_per_second = 1.0 * dataloader.__len__() / (infer_end - infer_start)
+        logger.info("*************infer_example_per_second %lf ***************",    
+                    infer_example_per_second)
 
         if self.args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
@@ -2133,6 +2142,9 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
         if self.args.past_index >= 0:
             self._past = None
 
+        # 计时开始
+        infer_start = time.time()
+
         disable_tqdm = not self.is_local_process_zero() or self.args.disable_tqdm
         if self.split_strategy == -1:
             for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
@@ -2160,6 +2172,13 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
             eval_losses: List[float] = self.queue_to_prediction_loop.get()
             preds: torch.Tensor = self.queue_to_prediction_loop.get()
             label_ids: torch.Tensor = self.queue_to_prediction_loop.get()
+
+        # 计时结束
+        torch.cuda.synchronize()
+        infer_end = time.time()
+        infer_example_per_second = 1.0 * dataloader.__len__() / (infer_end - infer_start)
+        logger.info("*************infer_example_per_second %lf ***************",    
+                    infer_example_per_second)
 
         if self.args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
