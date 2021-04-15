@@ -246,10 +246,10 @@ class SplitSingleTrainer:
         self.use_tune_checkpoints = False
         self.scaling_logger = get_logger(0, args.model_split + str(self.args.per_device_eval_batch_size))
         self.prediction_func_map={
-            0:prediction_step_head_mask,
-            1:prediction_step_embedding,
-            2:prediction_step_hidden_1,
-            3:prediction_step_encoder,
+            0:self.prediction_step_head_mask,
+            1:self.prediction_step_embedding,
+            2:self.prediction_step_hidden_1,
+            3:self.prediction_step_encoder,
         }
         self.lobj = {}
 
@@ -1314,7 +1314,7 @@ class SplitSingleTrainer:
                     label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
         else:
             for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
-                loss, logits, labels = self.prediction_map[self.split_strategy](model_pre, model_suf, inputs, prediction_loss_only)
+                loss, logits, labels = self.prediction_func_map[self.split_strategy](model_pre, model_suf, inputs, prediction_loss_only)
                 batch_size = inputs[list(inputs.keys())[0]].shape[0]
                 if loss is not None:
                     eval_losses.extend([loss] * batch_size)
@@ -1701,16 +1701,16 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
             model_pre,
             model_suf
         )
-        self.queue_to_gpu_loop = Queue(maxsize=5)
+        self.queue_to_gpu_loop = Queue(maxsize=1000)
         self.queue_to_prediction_loop = Queue(maxsize=3)
         self.thread_gpu = threading.Thread(
             target=SplitSingleTrainerPipe2Level.pipe_gpu_model,
             args=(self, self.args.prediction_loss_only))
         self.prediction_func_map={
-            0:prediction_step_head_mask,
-            1:prediction_step_embedding,
-            2:prediction_step_hidden_1,
-            3:prediction_step_encoder,
+            0:self.prediction_step_head_mask,
+            1:self.prediction_step_embedding,
+            2:self.prediction_step_hidden_1,
+            3:self.prediction_step_encoder,
         }
 
 
@@ -1741,6 +1741,7 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
                 if inputs == None :
                     break
 
+                has_labels = any(inputs.get(k) is not None for k in ["labels", "lm_labels", "masked_lm_labels"])
                 with torch.no_grad():
                     inputs = self._prepare_inputs(inputs)
                     outputs = self.model_suf(**inputs)
@@ -1861,7 +1862,7 @@ class SplitSingleTrainerPipe2Level(SplitSingleTrainer):
             self.thread_gpu.start()
 
             for inputs in tqdm(dataloader, desc=description, disable=disable_tqdm):
-                self.prediction_map[self.split_strategy](model_pre, inputs)
+                self.prediction_func_map[self.split_strategy](self.model_pre, inputs)
             self.queue_to_gpu_loop.put(None)
 
             self.thread_gpu.join()
@@ -2050,82 +2051,18 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
             model_pre,
             model_suf
         )
-        self.queue_to_cpu_loop = Queue(maxsize=5)
-        self.queue_to_gpu_loop = Queue(maxsize=5)
+        self.queue_to_cpu_loop = Queue(maxsize=1000)
+        self.queue_to_gpu_loop = Queue(maxsize=1000)
         self.queue_to_prediction_loop = Queue(maxsize=3)
         self.thread_gpu = threading.Thread(
             target=SplitSingleTrainerPipe2Level.pipe_gpu_model,
             args=(self, self.args.prediction_loss_only))
         self.prediction_func_map={
-            0:prediction_step_head_mask,
-            1:prediction_step_embedding,
-            2:prediction_step_hidden_1,
-            3:prediction_step_encoder,
+            0:self.prediction_step_head_mask,
+            1:self.prediction_step_embedding,
+            2:self.prediction_step_hidden_1,
+            3:self.prediction_step_encoder,
         }
-
-
-    def pipe_gpu_model(
-            self,
-            prediction_loss_only: bool
-        ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
-            """
-            Perform an evaluation step on :obj:`model` using obj:`inputs`.
-
-            Subclass and override to inject custom behavior.
-
-            Args:
-                prediction_loss_only (:obj:`bool`):
-                    Whether or not to return the loss only.
-
-            Return:
-                Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
-                A tuple with the loss, logits and labels (each being optional).
-            """
-
-            eval_losses: List[float] = []
-            preds: torch.Tensor = None
-            label_ids: torch.Tensor = None
-
-            while True:
-                inputs = self.queue_to_gpu_loop.get()
-                if inputs == None :
-                    break
-
-                with torch.no_grad():
-                    inputs = self._prepare_inputs(inputs)
-                    outputs = self.model_suf(**inputs)
-                    self.lobj = {"ph": "X", "name": "foward", "ts": time.time(), "pid": 0, "dur": 0}
-                    self.scaling_logger.info(json.dumps(self.lobj))
-                    if has_labels:
-                        # The .mean() is to reduce in case of distributed training
-                        loss = outputs[0].mean().item()
-                        logits = outputs[1:]
-                    else:
-                        loss = None
-                        # Slicing so we get a tuple even if `outputs` is a `ModelOutput`.
-                        logits = outputs[:]
-                    if self.args.past_index >= 0:
-                        self._past = outputs[self.args.past_index if has_labels else self.args.past_index - 1]
-
-                if prediction_loss_only:
-                    logits, labels = None, None
-                else:
-                    labels = inputs.get("labels")
-                    if labels is not None:
-                        labels = labels.detach()
-                    logits = tuple(l.detach() for l in logits)
-
-                batch_size = inputs[list(inputs.keys())[0]].shape[0]
-                if loss is not None:
-                    eval_losses.extend([loss] * batch_size)
-                if logits is not None:
-                    preds = logits if preds is None else tuple(torch.cat((p, l), dim=0) for p, l in zip(preds, logits))
-                if labels is not None:
-                    label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
-
-            self.queue_to_prediction_loop.put(eval_losses)
-            self.queue_to_prediction_loop.put(preds)
-            self.queue_to_prediction_loop.put(label_ids)
 
 
     def prediction_loop(
@@ -2209,8 +2146,8 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
                     label_ids = labels if label_ids is None else torch.cat((label_ids, labels), dim=0)
         else:
             thread_cpu = threading.Thread(
-                target=self.prediction_map[self.split_strategy],
-                args=(self, model_pre))
+                target=self.prediction_func_map[self.split_strategy],
+                args=(self.model_pre, ))
             thread_cpu.start()
             self.thread_gpu.start()
 
@@ -2273,9 +2210,7 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
         return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
 
 
-    def prediction_step_head_mask(
-        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
-    ):
+    def prediction_step_head_mask(self, model_pre):
         with torch.no_grad():
             while True:
                 inputs = self.queue_to_cpu_loop.get()
@@ -2288,9 +2223,7 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
                 self.queue_to_gpu_loop.put(inputs)
 
 
-    def prediction_step_embedding(
-        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
-    ):
+    def prediction_step_embedding(self, model_pre):
         with torch.no_grad():
             while True:
                 inputs = self.queue_to_cpu_loop.get()
@@ -2304,9 +2237,7 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
                 self.queue_to_gpu_loop.put(inputs)
 
 
-    def prediction_step_hidden_1(
-        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
-    ):
+    def prediction_step_hidden_1(self, model_pre):
         with torch.no_grad():
             while True:
                 inputs = self.queue_to_cpu_loop.get()
@@ -2322,9 +2253,7 @@ class SplitSingleTrainerPipe3Level(SplitSingleTrainer):
                 self.queue_to_gpu_loop.put(inputs)
 
 
-    def prediction_step_encoder(
-        self, model_pre, inputs: Dict[str, Union[torch.Tensor, Any]]
-    ):
+    def prediction_step_encoder(self, model_pre):
         with torch.no_grad():
             while True:
                 inputs = self.queue_to_cpu_loop.get()
