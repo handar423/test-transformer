@@ -29,6 +29,7 @@ from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTok
 from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers import (
     HfArgumentParser,
+    HorovodTrainer,
     Trainer,
     TrainingArguments,
     glue_compute_metrics,
@@ -159,7 +160,7 @@ def main():
         return compute_metrics_fn
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = HorovodTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

@@ -54,14 +54,14 @@ of GLUE benchmark on the website. For QQP and WNLI, please refer to [FAQ #12](ht
 Before running any one of these GLUE tasks you should download the
 [GLUE data](https://gluebenchmark.com/tasks) by running the following lines at the root of the repo
 ```
-python utils/download_glue_data.py --data_dir /path/to/glue --tasks all
+python utils/download_glue_data.py --data_dir ~/data/glue --tasks all
 ```
 
 after replacing *path/to/glue* with a value that you like. Then you can run
 
 ```bash
-export GLUE_DIR=/path/to/glue
-export TASK_NAME=MRPC
+export GLUE_DIR=~/data/glue
+export TASK_NAME=MNLI
 
 python run_glue.py \
   --model_name_or_path bert-base-cased \
