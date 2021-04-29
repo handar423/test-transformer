@@ -153,6 +153,7 @@ class HorovodTrainer:
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         tb_writer: Optional["SummaryWriter"] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        use_sched_opt=False,
         **kwargs,
     ):
         try:
@@ -248,6 +249,7 @@ class HorovodTrainer:
         self.compression = hvd.Compression.fp16 if self.args.fp16 else hvd.Compression.none
         self.scaling_logger = get_logger(hvd)
         self.lobj = {}
+        self.use_sched_opt = use_sched_opt
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
         if not self.args.remove_unused_columns:
@@ -391,12 +393,22 @@ class HorovodTrainer:
             # )
             optimizer = optim.SGD(optimizer_grouped_parameters, 
                 lr=self.args.learning_rate)
-            # Horovod: wrap optimizer with DistributedOptimizer.
-            self.optimizer = hvd.DistributedOptimizer(
-                optimizer, named_parameters=self.model.named_parameters(),
-                compression=self.compression,
-                # model=self.model, num_steps=self.args.max_steps,
-                backward_passes_per_step=self.args.gradient_accumulation_steps)
+            # SDCC: wrapped optimizer
+            if self.use_sched_opt:
+                print('use scheduled opt')
+                self.optimizer = hvd.SDCC_ScheduledOptimizer(
+                    optimizer,
+                    self.model,
+                    num_steps=self.args.max_steps,
+                    named_parameters=self.model.named_parameters(),
+                    compression=self.compression)
+            else:
+                print('use hvd default opt')
+                self.optimizer = hvd.DistributedOptimizer(
+                    optimizer,
+                    named_parameters=self.model.named_parameters(),
+                    compression=self.compression)
+
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
         if self.lr_scheduler is None:
