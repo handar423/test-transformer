@@ -713,6 +713,7 @@ if is_tf_available():
 
     # Trainer
     from .trainer_tf import TFTrainer
+    from .trainer_tf_horovod import TFTrainerHorovod
 
 
 if not is_tf_available() and not is_torch_available():

@@ -66,9 +66,9 @@ if version.parse(torch.__version__) < version.parse("1.6"):
 
     if is_apex_available():
         from apex import amp
-    _use_apex = True
+    _use_apex = False
 else:
-    _use_native_amp = True
+    _use_native_amp = False
     from torch.cuda.amp import autocast
 
 if is_datasets_available():
@@ -247,6 +247,7 @@ class HorovodTrainer:
         self.hp_search_backend = None
         self.use_tune_checkpoints = False
         self.compression = hvd.Compression.fp16 if self.args.fp16 else hvd.Compression.none
+        print(self.compression)
         self.scaling_logger = get_logger(hvd)
         self.lobj = {}
         self.use_sched_opt = use_sched_opt

@@ -11,6 +11,7 @@ from typing import Dict, Optional
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+import horovod.tensorflow as hvd
 
 from transformers import (
     AutoConfig,
@@ -20,6 +21,7 @@ from transformers import (
     PreTrainedTokenizer,
     TFAutoModelForSequenceClassification,
     TFTrainer,
+    TFTrainerHorovod,
     TFTrainingArguments,
     glue_compute_metrics,
     glue_convert_examples_to_features,
@@ -28,6 +30,10 @@ from transformers import (
     glue_tasks_num_labels,
 )
 
+try:
+    hvd.init(model_bw_order_file="torch-bert-base")
+except:
+    hvd.init()
 
 class Split(Enum):
     train = "train"
@@ -208,7 +214,7 @@ def main():
         return glue_compute_metrics(data_args.task_name, preds, p.label_ids)
 
     # Initialize our Trainer
-    trainer = TFTrainer(
+    trainer = TFTrainerHorovod(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

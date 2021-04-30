@@ -126,20 +126,7 @@ def create_optimizer(
             decay_schedule_fn=lr_schedule,
             warmup_steps=num_warmup_steps,
         )
-    if weight_decay_rate > 0.0:
-        optimizer = AdamWeightDecay(
-            learning_rate=lr_schedule,
-            weight_decay_rate=weight_decay_rate,
-            beta_1=adam_beta1,
-            beta_2=adam_beta2,
-            epsilon=adam_epsilon,
-            exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"],
-            include_in_weight_decay=include_in_weight_decay,
-        )
-    else:
-        optimizer = tf.keras.optimizers.Adam(
-            learning_rate=lr_schedule, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon
-        )
+    optimizer = tf.keras.optimizers.SGD(learning_rate=lr_schedule)
     # We return the optimizer and the LR scheduler in order to better track the
     # evolution of the LR independently of the optimizer.
     return optimizer, lr_schedule

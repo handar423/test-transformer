@@ -5,7 +5,7 @@ from typing import Tuple
 from .file_utils import cached_property, is_tf_available, tf_required
 from .training_args import TrainingArguments
 from .utils import logging
-
+import horovod.tensorflow as hvd
 
 logger = logging.get_logger(__name__)
 
@@ -134,8 +134,8 @@ class TFTrainingArguments(TrainingArguments):
                 strategy = tf.distribute.experimental.TPUStrategy(tpu)
             elif len(gpus) == 0:
                 strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
-            elif len(gpus) == 1:
-                strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+            elif len(gpus) > 0:
+                strategy = tf.distribute.OneDeviceStrategy(device="/gpu:" + str(hvd.local_rank()))
             elif len(gpus) > 1:
                 # If you only want to use a specific subset of GPUs use `CUDA_VISIBLE_DEVICES=0`
                 strategy = tf.distribute.MirroredStrategy()
