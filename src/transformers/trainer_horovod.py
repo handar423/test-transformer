@@ -34,7 +34,7 @@ from .integrations import (
     run_hp_search_ray,
 )
 from .modeling_utils import PreTrainedModel
-from .optimization import AdamW, get_linear_schedule_with_warmup
+from .optimization import AdamW, get_linear_schedule_with_warmup, get_constant_schedule
 from .tokenization_utils_base import PreTrainedTokenizerBase
 from .trainer_utils import (
     PREFIX_CHECKPOINT_DIR,
@@ -413,9 +413,11 @@ class HorovodTrainer:
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
         if self.lr_scheduler is None:
-            self.lr_scheduler = get_linear_schedule_with_warmup(
-                self.optimizer, num_warmup_steps=self.args.warmup_steps, num_training_steps=num_training_steps
-            )
+            # self.lr_scheduler = get_linear_schedule_with_warmup(
+            #     self.optimizer, num_warmup_steps=self.args.warmup_steps, num_training_steps=num_training_steps
+            # )
+            self.lr_scheduler = get_constant_schedule(
+                self.optimizer)
 
     def setup_wandb(self):
         """
