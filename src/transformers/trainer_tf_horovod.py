@@ -612,7 +612,7 @@ class TFTrainerHorovod:
             end_time = time.clock()
             t.close()
 
-            logger.warning("Training took: {}".format(str((end_time - start_time)/(t_total - 40))))
+            logger.warning("Training took: {}".format(str((t_total - 40)/(end_time - start_time))))
 
         if self.args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training
