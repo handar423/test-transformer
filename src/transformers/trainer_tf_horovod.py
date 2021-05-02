@@ -558,7 +558,7 @@ class TFTrainerHorovod:
                 for step, batch in enumerate(train_ds):
                     self.global_step = iterations.numpy()
                     if (self.global_step == 40):
-                        start_time = time.clock()
+                        start_time = time.time()
                     self.epoch_logging = epoch_iter - 1 + (step + 1) / self.steps_per_epoch
 
                     self.distributed_training_steps(batch)
@@ -609,7 +609,7 @@ class TFTrainerHorovod:
 
                 self.train_loss.reset_states()
 
-            end_time = time.clock()
+            end_time = time.time()
             t.close()
 
             logger.warning("Training took: {}".format(str((t_total - 40)/(end_time - start_time))))
