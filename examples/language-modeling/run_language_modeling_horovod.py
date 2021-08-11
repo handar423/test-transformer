@@ -26,6 +26,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+from transformers.trainer_horovod import HorovodTrainer
+
 from transformers import (
     CONFIG_MAPPING,
     MODEL_WITH_LM_HEAD_MAPPING,
@@ -35,7 +37,6 @@ from transformers import (
     DataCollatorForLanguageModeling,
     DataCollatorForPermutationLanguageModeling,
     HfArgumentParser,
-    HorovodTrainer,
     LineByLineTextDataset,
     PreTrainedTokenizer,
     TextDataset,

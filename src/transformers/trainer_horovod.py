@@ -19,6 +19,7 @@ from torch.utils.data.dataset import Dataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.sampler import RandomSampler, Sampler, SequentialSampler
 from tqdm.auto import tqdm, trange
+from torch import optim
 
 from .data.data_collator import DataCollator, DataCollatorWithPadding, default_data_collator
 from .file_utils import is_datasets_available, is_torch_tpu_available
@@ -155,7 +156,11 @@ class HorovodTrainer:
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         **kwargs,
     ):
-        hvd.init(model_bw_order_file="torch-bert-base")
+        try:
+            hvd.init(model_bw_order_file="torch-bert-base")
+        except:
+            hvd.init()
+
         if args is None:
             logger.info("No `TrainingArguments` passed, using the current path as `output_dir`.")
             args = TrainingArguments("tmp_trainer")
@@ -243,7 +248,7 @@ class HorovodTrainer:
         self.hp_search_backend = None
         self.use_tune_checkpoints = False
         self.compression = hvd.Compression.fp16 if self.args.fp16 else hvd.Compression.none
-        self.scaling_logger = get_logger(hvd)
+        self.scaling_logger = get_logger(hvd, self.__class__.__name__)
         self.lobj = {}
         self.model_name = model_name
 
@@ -381,17 +386,19 @@ class HorovodTrainer:
                     "weight_decay": 0.0,
                 },
             ]
-            optimizer = AdamW(
-                optimizer_grouped_parameters,
-                lr=self.args.learning_rate,
-                betas=(self.args.adam_beta1, self.args.adam_beta2),
-                eps=self.args.adam_epsilon,
-            )
+            # optimizer = AdamW(
+            #     optimizer_grouped_parameters,
+            #     lr=self.args.learning_rate,
+            #     betas=(self.args.adam_beta1, self.args.adam_beta2),
+            #     eps=self.args.adam_epsilon,
+            # )
+            optimizer = optim.SGD(optimizer_grouped_parameters, 
+                lr=self.args.learning_rate)
             # Horovod: wrap optimizer with DistributedOptimizer.
             self.optimizer = hvd.DistributedOptimizer(
                 optimizer, named_parameters=self.model.named_parameters(),
                 compression=self.compression,
-                model=self.model, num_steps=self.args.max_steps,
+                # model=self.model, num_steps=self.args.max_steps,
                 backward_passes_per_step=self.args.gradient_accumulation_steps)
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
