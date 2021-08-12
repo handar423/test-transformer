@@ -227,7 +227,7 @@ class SingleTrainer:
             self.scaler = torch.cuda.amp.GradScaler()
         self.hp_search_backend = None
         self.use_tune_checkpoints = False
-        self.scaling_logger = get_logger(0)
+        self.scaling_logger = get_logger(0, self.__class__.__name__)
         self.lobj = {}
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):

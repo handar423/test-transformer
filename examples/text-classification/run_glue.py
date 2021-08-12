@@ -27,12 +27,13 @@ import numpy as np
 
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, GlueDataset
 from transformers import GlueDataTrainingArguments as DataTrainingArguments
+from transformers.data.metrics import glue_compute_metrics
 from transformers import (
     HfArgumentParser,
     Trainer,
     SingleTrainer,
     TrainingArguments,
-    glue_compute_metrics,
+    # glue_compute_metrics,
     glue_output_modes,
     glue_tasks_num_labels,
     set_seed,
