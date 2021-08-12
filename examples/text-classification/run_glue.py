@@ -28,6 +28,7 @@ import numpy as np
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, GlueDataset
 from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers.data.metrics import glue_compute_metrics
+from transformers.trainer_horovod import HorovodTrainer
 from transformers import (
     HfArgumentParser,
     Trainer,
@@ -162,8 +163,9 @@ def main():
         return compute_metrics_fn
 
     # Initialize our Trainer
-    trainer = SingleTrainer(
+    trainer = HorovodTrainer(
         model=model,
+        model_name=model_args.model_name_or_path,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
