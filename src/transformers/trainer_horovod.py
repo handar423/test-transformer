@@ -160,6 +160,12 @@ class HorovodTrainer:
             hvd.init(model_bw_order_file="torch-bert-base")
         except:
             hvd.init()
+        use_bytescheduler = int(os.environ.get('USE_BYTESCHEDULER', '0'))
+        if use_bytescheduler > 0:
+            import bytescheduler.pytorch.horovod as bsc
+            bsc.init()
+            print('use bytescheduler, loaded plugin')
+            
         if args is None:
             logger.info("No `TrainingArguments` passed, using the current path as `output_dir`.")
             args = TrainingArguments("tmp_trainer")
@@ -410,6 +416,13 @@ class HorovodTrainer:
                     named_parameters=self.model.named_parameters(),
                     compression=self.compression)
 
+            use_bytescheduler = int(os.environ.get('USE_BYTESCHEDULER', '0'))
+            if use_bytescheduler > 0:
+                import bytescheduler.pytorch.horovod as bsc
+                self.optimizer = bsc.ScheduledOptimizer(self.model,
+                                             self.optimizer, 
+                                             num_training_steps)
+                print('initialized bsc optimizer')
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
         if self.lr_scheduler is None:
