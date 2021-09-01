@@ -261,7 +261,7 @@ def main():
     # Initialize our Trainer
     trainer = HorovodTrainer(
         model=model,
-        model_name=model_args.model_type,
+        # model_name=model_args.model_type,
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
